@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Barra Interativa V4.1 — Presentes</title>
+<style>
+:root{font-family:Arial,Helvetica,sans-serif;color:#fff}*{box-sizing:border-box}body{margin:0;background:transparent}.overlay{width:min(96vw,1080px);margin:18px auto;text-align:center;filter:drop-shadow(0 3px 5px #000a)}.labels{display:flex;justify-content:space-between;font-weight:900;font-size:clamp(17px,3vw,29px);text-shadow:0 2px 4px #000}.bar{display:flex;overflow:hidden;height:52px;border:3px solid white;border-radius:32px;background:#126c29;box-shadow:0 2px 9px #0009}.left{width:50%;background:linear-gradient(90deg,#ac0920,#ec3545);transition:width .55s ease}.right{flex:1;background:linear-gradient(90deg,#26af49,#07842c)}.points{font-size:12px;text-shadow:0 2px 4px #000;opacity:.8;margin-top:5px}.panel{background:#1d1d20;color:#fff;border:1px solid #555;border-radius:12px;padding:18px;width:min(96vw,1080px);margin:20px auto;box-shadow:0 3px 12px #0005}.hidden{display:none!important}.panel h2{font-size:19px;margin:0 0 10px}.hint{font-size:13px;line-height:1.5;color:#d5d5dc}.status{font-size:13px;margin:8px 0 12px}.controls,.settings{display:flex;flex-wrap:wrap;gap:9px;margin:12px 0;align-items:end}button{background:#364258;border:1px solid #6e819e;color:#fff;padding:10px 12px;border-radius:8px;cursor:pointer}button:hover{background:#4b5c77}button:focus-visible,input:focus-visible{outline:2px solid #a6d4ff}label{display:flex;flex-direction:column;gap:5px;font-size:13px}input{background:#222b3c;border:1px solid #758099;color:white;padding:9px;border-radius:6px;min-width:95px;max-width:220px}.giftgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(185px,1fr));gap:10px}.gift{border:1px solid #666;background:#272a32;border-radius:9px;padding:10px;display:grid;grid-template-columns:1fr 75px;gap:8px;align-items:center}.gift strong{font-size:14px}.gift small{color:#ccc;display:block;font-size:11px}.gift input{min-width:0;width:100%;max-width:100%;padding:7px}.gift button{grid-column:1 / -1;padding:8px}.red{border-left:4px solid #ee3c4b}.green{border-left:4px solid #25b354}.log{background:#090c13;border:1px solid #484c56;padding:10px;max-height:260px;min-height:110px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.4 Consolas,monospace}.divider{border-top:1px solid #555;margin:16px 0}.sub{font-size:15px;margin:10px 0}.tiny{font-size:12px;color:#c4cad6}.wide{min-width:280px;max-width:100%}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.1/socket.io.min.js" defer></script>
+</head><body>
+<div class="overlay"><div class="labels"><span id="leftLabel">Lula 50,00%</span><span id="rightLabel">Flávio 50,00%</span></div><div class="bar"><div class="left" id="leftFill"></div><div class="right"></div></div><div class="points" id="points">0 pontos · 0 pontos</div></div>
+<section class="panel hidden" id="panel"><h2>Barra Interativa V4.1 — Diagnóstico e testes</h2><p class="hint">Este painel aparece apenas com <code>?test=1</code> no endereço. Sem esse parâmetro, somente a barra é exibida.</p>
+<div class="settings"><label>Servidor Socket.IO <input class="wide" id="server" value="https://tikfinity.zerody.one"></label><label>Channel ID <input id="channel" inputmode="numeric" value=""></label><label>Screen ID <input id="screen" type="number" min="1" value="1"></label></div>
+<div class="controls"><button id="connect">Conectar Socket.IO</button><button id="disconnect">Desconectar</button><button id="clear">Limpar log</button><button id="reset">Zerar pontuação</button></div><div class="status" id="status">Socket.IO: aguardando conexão</div>
+<p class="hint">O widget oficial utiliza Socket.IO e o evento <code>executeAction(actionInfo, context)</code>. Esta é uma integração experimental: o servidor pode recusar páginas HTML locais ou não encaminhar eventos para clientes independentes. O simulador interno abaixo funciona sem conexão.</p>
+<div class="divider"></div><h3 class="sub">Presentes e pontos — configuração</h3><div class="giftgrid" id="giftgrid"></div>
+<p class="tiny">Os nomes podem variar entre idiomas e versões do TikTok. Edite os nomes para corresponder ao campo <code>giftName</code> que aparecer no log. Os valores são pontos por unidade de presente.</p>
+<div class="controls"><button id="resetRules">Restaurar nomes e valores</button><button id="testAll">Testar todos os presentes</button></div>
+<div class="divider"></div><h3 class="sub">Log de eventos</h3><pre class="log" id="log"></pre></section>
+<script>
+(()=>{'use strict';
+const $=id=>document.getElementById(id), params=new URLSearchParams(location.search), test=params.get('test')==='1';
+if(test)$('panel').classList.remove('hidden');
+const defaults=[
+ {team:0,name:'Rosa vermelha',aliases:'Rosa, Rose, Red Rose, Rosa vermelha',points:1,emoji:'🌹'},
+ {team:0,name:'Rosquinha',aliases:'Rosquinha, Doughnut, Donut',points:30,emoji:'🍩'},
+ {team:0,name:'Coqueiro',aliases:'Coqueiro, Coconut Tree, Palm Tree',points:100,emoji:'🌴'},
+ {team:1,name:'Rosa branca',aliases:'Rosa branca, White Rose',points:1,emoji:'🤍'},
+ {team:1,name:'Capivara',aliases:'Capivara, Capybara',points:30,emoji:'🦫'},
+ {team:1,name:'Corações',aliases:'Corações, Hearts, Heart',points:199,emoji:'💚'}
+];
+let rules=defaults.map(x=>({...x})),score=[0,0],socket=null,connected=false,comboTotals=new Map();
+function log(msg){if(!test)return;const line='['+new Date().toLocaleTimeString()+'] '+msg+'\n';$('log').textContent=(line+$('log').textContent).slice(0,24000)}
+function normalize(x){return String(x??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim()}
+function render(){const total=score[0]+score[1],p=total?100*score[0]/total:50;const pct=new Intl.NumberFormat('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});$('leftFill').style.width=p+'%';$('leftLabel').textContent='Lula '+pct.format(p)+'%';$('rightLabel').textContent='Flávio '+pct.format(100-p)+'%';$('points').textContent=score[0].toLocaleString('pt-BR')+' pontos · '+score[1].toLocaleString('pt-BR')+' pontos'}
+function add(team,points){if(!Number.isFinite(points)||points<=0)return;score[team]+=points;render();log('PONTOS: '+(team===0?'vermelho':'verde')+' +'+points)}
+function findRule(name){let n=normalize(name);return rules.find(r=>r.aliases.split(',').some(alias=>normalize(alias)===n))}
+function applyGift(name,count=1,extra={}){let rule=findRule(name);if(!rule){log('PRESENTE SEM REGRA: '+String(name));return}let c=Number(count);if(!Number.isFinite(c)||c<1)c=1;c=Math.min(100000,Math.floor(c));add(rule.team,c*rule.points);log('PRESENTE: '+name+' x'+c+' ('+rule.points+' pontos/unidade)'+(extra.source?' via '+extra.source:''))}
+function parseGiftPayload(context,source){let d=context||{}, name=d.giftName||d.gift?.name||d.gift?.giftName||d.gift_name||d.name||d.extendedGiftInfo?.name; if(!name){log('AVISO: evento sem giftName; confira o JSON recebido');return}
+// Alguns eventos de combo informam a quantidade acumulada a cada atualização.
+let count=Number(d.repeatCount??d.repeat_count??d.count??1);if(!Number.isFinite(count)||count<1)count=1;
+if(d.repeatEnd===false||d.repeat_end===false){log('COMBO EM ANDAMENTO: '+name+' x'+count+' (aguardando final)');return}
+applyGift(name,count,{source});}
+function handleAction(actionInfo,context){log('RECEBIDO executeAction: '+JSON.stringify({actionInfo,context}).slice(0,4500));let name=actionInfo?.name||'';if(name&& !/gift|presente/i.test(name)&&!(context&&context.giftName)){log('IGNORADO: ação não relacionada a presente');return}parseGiftPayload(context,'executeAction')}
+function handleGeneric(evt,data){log('RECEBIDO '+evt+': '+JSON.stringify(data).slice(0,3500));if(/gift|present/i.test(evt))parseGiftPayload(data?.data||data,'evento '+evt)}
+function status(text){$('status').textContent=text}
+function disconnect(){if(socket){socket.removeAllListeners();socket.disconnect();socket=null}connected=false;status('Socket.IO: desconectado')}
+function connect(){disconnect();if(typeof window.io!=='function'){status('Socket.IO indisponível: biblioteca não carregada');log('ERRO: não foi possível carregar a biblioteca Socket.IO (verifique internet)');return}const url=$('server').value.trim(),channelId=Number($('channel').value),screenId=Number($('screen').value);if(!/^https?:\/\//i.test(url)||!Number.isSafeInteger(channelId)||channelId<=0){status('Informe servidor e Channel ID válidos');return}status('Socket.IO: conectando...');log('TENTANDO '+url+' channelId='+channelId+' screenId='+screenId);
+try{socket=window.io(url,{transports:['websocket'],upgrade:false,reconnection:true,reconnectionAttempts:5,timeout:10000,query:{appType:'widget',shared:false}});
+socket.on('connect',()=>{connected=true;status('Socket.IO conectado ('+socket.id+') — aguardando ações');log('CONECTADO Socket.IO');socket.emit('login',{channelId,appType:'widget',receiveChat:false,receiveGift:true})});
+socket.on('disconnect',reason=>{connected=false;status('Socket.IO desconectado: '+reason);log('DESCONECTADO: '+reason)});
+socket.on('connect_error',err=>{status('Falha na conexão Socket.IO: '+err.message);log('ERRO: '+err.message)});
+socket.on('executeAction',(actionInfo,context)=>handleAction(actionInfo,context));
+socket.onAny((event,...args)=>{if(event==='executeAction')return;if(/gift|present/i.test(event))handleGeneric(event,args[0]);else if(test&&event!=='widgetSettings')log('EVENTO '+event+': '+JSON.stringify(args).slice(0,1500))});
+}catch(err){status('Erro: '+err.message);log('ERRO '+err.message)}}
+function buildRules(){const grid=$('giftgrid');grid.innerHTML='';rules.forEach((rule,i)=>{let item=document.createElement('div');item.className='gift '+(rule.team===0?'red':'green');item.innerHTML='<div><strong></strong><small></small></div><label>Pontos<input type="number" min="1" step="1"></label><label style="grid-column:1/-1">Nomes aceitos (separados por vírgula)<input style="max-width:100%;width:100%"></label><button>Simular presente</button>';item.querySelector('strong').textContent=rule.emoji+' '+rule.name;item.querySelector('small').textContent=rule.team===0?'Equipe vermelha':'Equipe verde';const ins=item.querySelectorAll('input');ins[0].value=rule.points;ins[1].value=rule.aliases;ins[0].onchange=()=>{rule.points=Math.max(1,Math.floor(Number(ins[0].value)||1));ins[0].value=rule.points};ins[1].onchange=()=>{rule.aliases=ins[1].value};item.querySelector('button').onclick=()=>{log('RECEBIDO SIMULADO: '+JSON.stringify({event:'executeAction',context:{giftName:rule.aliases.split(',')[0].trim(),repeatCount:1}}));applyGift(rule.aliases.split(',')[0].trim(),1,{source:'teste'})};grid.append(item)})}
+$('connect').onclick=connect;$('disconnect').onclick=disconnect;$('clear').onclick=()=>{$('log').textContent=''};$('reset').onclick=()=>{score=[0,0];comboTotals.clear();render();log('PONTUAÇÃO ZERADA')};$('resetRules').onclick=()=>{rules=defaults.map(x=>({...x}));buildRules();log('REGRAS RESTAURADAS')};$('testAll').onclick=()=>{for(const r of rules)applyGift(r.aliases.split(',')[0].trim(),1,{source:'teste'})};
+// Disponível para testes no console, sem enviar eventos ao servidor.
+window.barraV4={simularPresente:(nome,quantidade=1)=>applyGift(nome,quantidade,{source:'console'}),simularAcao:(actionInfo,context)=>handleAction(actionInfo,context),zerar:()=>{$('reset').click()}};
+const storedChannel=params.get('cid')||params.get('channel');if(storedChannel)$('channel').value=storedChannel;buildRules();render();log('V4.1 PRONTA. Informe Channel ID e clique em Conectar Socket.IO.');
+})();
+</script></body></html>
